@@ -3,13 +3,61 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-// ───────────────────────── الثوابت ─────────────────────────
-const int kMinDepth = 1;
-const int kMaxDepth = 9;
-const int kInitialDepth = 5;
+// ───────────────────────── أنواع المفاتيح ─────────────────────────
+/// مواصفات نوع مفتاح: عدد القطع (الدبابيس) ومدى أرقام العمق.
+/// لإضافة نوع جديد أضف سطرًا في [kKeyTypes] فقط.
+class KeyType {
+  const KeyType({
+    required this.id,
+    required this.brand,
+    required this.pins,
+    required this.minDepth,
+    required this.maxDepth,
+    this.custom = false,
+  });
+
+  final String id; // مثل KW1
+  final String brand; // مثل Kwikset
+  final int pins;
+  final int minDepth;
+  final int maxDepth;
+  final bool custom; // النوع المخصص: يعدّل المستخدم عدد القطع والعمق
+
+  int get levels => maxDepth - minDepth + 1;
+  int get defaultDepth => ((minDepth + maxDepth) / 2).round();
+
+  String get label => brand.isEmpty ? id : '$id · $brand';
+
+  KeyType copyWith({int? pins, int? maxDepth}) => KeyType(
+        id: id,
+        brand: brand,
+        pins: pins ?? this.pins,
+        minDepth: minDepth,
+        maxDepth: maxDepth ?? this.maxDepth,
+        custom: custom,
+      );
+}
+
+const List<KeyType> kKeyTypes = [
+  // Kwikset KW1: 5 قطع، أعماق 1–7 (العمق 7 يُستخدم نادرًا)
+  KeyType(id: 'KW1', brand: 'Kwikset', pins: 5, minDepth: 1, maxDepth: 7),
+  // Schlage SC1: 5 قطع، أعماق 0–9
+  KeyType(id: 'SC1', brand: 'Schlage', pins: 5, minDepth: 0, maxDepth: 9),
+  // نوع حر: عدد القطع ومدى العمق يحددهما المستخدم
+  KeyType(
+    id: 'مخصص',
+    brand: '',
+    pins: 5,
+    minDepth: 1,
+    maxDepth: 7,
+    custom: true,
+  ),
+];
+
 const int kMinCuts = 3;
 const int kMaxCuts = 10;
-const int kDefaultCuts = 5;
+const int kMinCustomMaxDepth = 3;
+const int kMaxCustomMaxDepth = 9;
 
 // ألوان شاشة الجهاز (برتقالي كما في الصورة)
 const Color kLcdColor = Color(0xFFF5A623);
@@ -50,15 +98,34 @@ class KeyCopyScreen extends StatefulWidget {
 }
 
 class _KeyCopyScreenState extends State<KeyCopyScreen> {
-  int _cuts = kDefaultCuts;
-  List<int> _depths = List<int>.filled(kDefaultCuts, kInitialDepth);
+  late KeyType _type;
+  late List<int> _depths;
   int _selected = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _type = kKeyTypes.first;
+    _depths = List<int>.filled(_type.pins, _type.defaultDepth);
+  }
 
   String get _code => _depths.join(' ');
 
+  // اختيار نوع مفتاح: يعيد ضبط القطع على عمق ابتدائي مناسب لذلك النوع
+  void _selectType(KeyType t) {
+    if (t.id == _type.id) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _type = t;
+      _depths = List<int>.filled(t.pins, t.defaultDepth);
+      _selected = 0;
+    });
+  }
+
   // أعلى/أسفل: تحريك الخط للأعلى (أقل عمقًا) أو للأسفل (أكثر عمقًا)
   void _changeDepth(int delta) {
-    final next = (_depths[_selected] + delta).clamp(kMinDepth, kMaxDepth);
+    final next =
+        (_depths[_selected] + delta).clamp(_type.minDepth, _type.maxDepth);
     if (next == _depths[_selected]) return;
     HapticFeedback.selectionClick();
     setState(() => _depths[_selected] = next);
@@ -66,7 +133,7 @@ class _KeyCopyScreenState extends State<KeyCopyScreen> {
 
   // يمين/يسار: الانتقال بين مواضع القطع
   void _moveSelection(int delta) {
-    final next = (_selected + delta).clamp(0, _cuts - 1);
+    final next = (_selected + delta).clamp(0, _type.pins - 1);
     if (next == _selected) return;
     HapticFeedback.selectionClick();
     setState(() => _selected = next);
@@ -74,28 +141,42 @@ class _KeyCopyScreenState extends State<KeyCopyScreen> {
 
   void _resetSelected() {
     HapticFeedback.mediumImpact();
-    setState(() => _depths[_selected] = kInitialDepth);
+    setState(() => _depths[_selected] = _type.defaultDepth);
   }
 
   void _resetAll() {
     HapticFeedback.mediumImpact();
     setState(() {
-      _depths = List<int>.filled(_cuts, kInitialDepth);
+      _depths = List<int>.filled(_type.pins, _type.defaultDepth);
       _selected = 0;
     });
   }
 
-  void _setCuts(int count) {
+  // تعديل عدد القطع (للنوع المخصص فقط)
+  void _setPins(int count) {
     final n = count.clamp(kMinCuts, kMaxCuts);
-    if (n == _cuts) return;
+    if (n == _type.pins) return;
     setState(() {
-      if (n > _cuts) {
-        _depths = [..._depths, ...List<int>.filled(n - _cuts, kInitialDepth)];
+      if (n > _type.pins) {
+        _depths = [
+          ..._depths,
+          ...List<int>.filled(n - _type.pins, _type.defaultDepth),
+        ];
       } else {
         _depths = _depths.sublist(0, n);
       }
-      _cuts = n;
-      if (_selected > _cuts - 1) _selected = _cuts - 1;
+      _type = _type.copyWith(pins: n);
+      if (_selected > n - 1) _selected = n - 1;
+    });
+  }
+
+  // تعديل أعلى رقم عمق (للنوع المخصص فقط)
+  void _setMaxDepth(int value) {
+    final m = value.clamp(kMinCustomMaxDepth, kMaxCustomMaxDepth);
+    if (m == _type.maxDepth) return;
+    setState(() {
+      _type = _type.copyWith(maxDepth: m);
+      _depths = _depths.map((d) => d > m ? m : d).toList();
     });
   }
 
@@ -107,6 +188,29 @@ class _KeyCopyScreenState extends State<KeyCopyScreen> {
         content: Text('تم نسخ الكود'),
         duration: Duration(seconds: 1),
       ),
+    );
+  }
+
+  Widget _stepperRow(
+    String label,
+    int value,
+    VoidCallback? onMinus,
+    VoidCallback? onPlus,
+  ) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(label),
+        IconButton(
+          icon: const Icon(Icons.remove_circle_outline),
+          onPressed: onMinus,
+        ),
+        Text('$value', style: Theme.of(context).textTheme.titleMedium),
+        IconButton(
+          icon: const Icon(Icons.add_circle_outline),
+          onPressed: onPlus,
+        ),
+      ],
     );
   }
 
@@ -127,19 +231,46 @@ class _KeyCopyScreenState extends State<KeyCopyScreen> {
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
           child: Column(
             children: [
+              // اختيار نوع المفتاح
+              SizedBox(
+                height: 48,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: kKeyTypes.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) {
+                    final t = kKeyTypes[i];
+                    return Center(
+                      child: ChoiceChip(
+                        label: Text(t.label),
+                        selected: t.id == _type.id,
+                        onSelected: (_) => _selectType(t),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 4),
               // المربع العلوي ثابت الأبعاد
               Center(
-                child: KeyDisplay(depths: _depths, selected: _selected),
+                child: KeyDisplay(
+                  depths: _depths,
+                  selected: _selected,
+                  minDepth: _type.minDepth,
+                  maxDepth: _type.maxDepth,
+                ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Text(
-                'الموضع ${_selected + 1} من $_cuts  •  العمق ${_depths[_selected]}',
+                'الموضع ${_selected + 1} من ${_type.pins}  •  '
+                'العمق ${_depths[_selected]}  '
+                '(${_type.minDepth}–${_type.maxDepth})',
                 style: theme.textTheme.bodyMedium,
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -163,21 +294,25 @@ class _KeyCopyScreenState extends State<KeyCopyScreen> {
                   ),
                 ],
               ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Text('عدد القطع'),
-                  IconButton(
-                    icon: const Icon(Icons.remove_circle_outline),
-                    onPressed: _cuts > kMinCuts ? () => _setCuts(_cuts - 1) : null,
-                  ),
-                  Text('$_cuts', style: theme.textTheme.titleMedium),
-                  IconButton(
-                    icon: const Icon(Icons.add_circle_outline),
-                    onPressed: _cuts < kMaxCuts ? () => _setCuts(_cuts + 1) : null,
-                  ),
-                ],
-              ),
+              // خيارات النوع المخصص فقط
+              if (_type.custom) ...[
+                _stepperRow(
+                  'عدد القطع',
+                  _type.pins,
+                  _type.pins > kMinCuts ? () => _setPins(_type.pins - 1) : null,
+                  _type.pins < kMaxCuts ? () => _setPins(_type.pins + 1) : null,
+                ),
+                _stepperRow(
+                  'أعلى عمق',
+                  _type.maxDepth,
+                  _type.maxDepth > kMinCustomMaxDepth
+                      ? () => _setMaxDepth(_type.maxDepth - 1)
+                      : null,
+                  _type.maxDepth < kMaxCustomMaxDepth
+                      ? () => _setMaxDepth(_type.maxDepth + 1)
+                      : null,
+                ),
+              ],
               // دائرة الأزرار في الأسفل
               Expanded(
                 child: Center(
@@ -203,10 +338,18 @@ class _KeyCopyScreenState extends State<KeyCopyScreen> {
 
 // ───────────────────────── مربع العرض (أبعاد ثابتة) ─────────────────────────
 class KeyDisplay extends StatelessWidget {
-  const KeyDisplay({super.key, required this.depths, required this.selected});
+  const KeyDisplay({
+    super.key,
+    required this.depths,
+    required this.selected,
+    required this.minDepth,
+    required this.maxDepth,
+  });
 
   final List<int> depths;
   final int selected;
+  final int minDepth;
+  final int maxDepth;
 
   static const double boxWidth = 340;
   static const double boxHeight = 190;
@@ -227,7 +370,12 @@ class KeyDisplay extends StatelessWidget {
         child: ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: CustomPaint(
-            painter: KeyPainter(depths: depths, selected: selected),
+            painter: KeyPainter(
+              depths: depths,
+              selected: selected,
+              minDepth: minDepth,
+              maxDepth: maxDepth,
+            ),
           ),
         ),
       ),
@@ -236,10 +384,17 @@ class KeyDisplay extends StatelessWidget {
 }
 
 class KeyPainter extends CustomPainter {
-  KeyPainter({required this.depths, required this.selected});
+  KeyPainter({
+    required this.depths,
+    required this.selected,
+    required this.minDepth,
+    required this.maxDepth,
+  });
 
   final List<int> depths;
   final int selected;
+  final int minDepth;
+  final int maxDepth;
 
   static const double pad = 14;
   static const double shoulderY = 76;
@@ -249,7 +404,7 @@ class KeyPainter extends CustomPainter {
   // ميل جانبي الهرم (1 = 45 درجة)
   static const double ridgeSlope = 1.0;
 
-  double _yOf(int depth) => firstY + (depth - kMinDepth) * step;
+  double _yOf(int depth) => firstY + (depth - minDepth) * step;
 
   /// يضيف الجزء الواقع بين نهاية قطعة (xe, ye) وبداية القطعة التالية (xs, ys).
   /// الخطان الصاعدان من الجانبين يلتقيان في قمة (هرم) إن كان التقاؤهما داخل
@@ -298,7 +453,7 @@ class KeyPainter extends CustomPainter {
     final guide = Paint()
       ..color = kLcdInk.withOpacity(0.12)
       ..strokeWidth = 1;
-    for (var d = kMinDepth; d <= kMaxDepth; d++) {
+    for (var d = minDepth; d <= maxDepth; d++) {
       canvas.drawLine(Offset(pad, _yOf(d)), Offset(w - pad, _yOf(d)), guide);
     }
 
