@@ -246,7 +246,29 @@ class KeyPainter extends CustomPainter {
   static const double firstY = 92;
   static const double step = 9.5;
 
+  // ميل جانبي الهرم (1 = 45 درجة)
+  static const double ridgeSlope = 1.0;
+
   double _yOf(int depth) => firstY + (depth - kMinDepth) * step;
+
+  /// يضيف الجزء الواقع بين نهاية قطعة (xe, ye) وبداية القطعة التالية (xs, ys).
+  /// الخطان الصاعدان من الجانبين يلتقيان في قمة (هرم) إن كان التقاؤهما داخل
+  /// المسافة بين القطعتين، وإلا يُوصل الخط مباشرة (كالانتقال من 4 إلى 2 البعيدة).
+  /// القمة لا ترتفع فوق مستوى الكتف.
+  void _addRidge(Path path, double xe, double ye, double xs, double ys) {
+    const m = ridgeSlope;
+    final xStar = (xe + xs) / 2 + (ye - ys) / (2 * m);
+    if (xStar <= xe || xStar >= xs) return; // وصلة مباشرة بلا قمة
+
+    final yStar = ye - m * (xStar - xe);
+    if (yStar >= shoulderY) {
+      path.lineTo(xStar, yStar);
+    } else {
+      // القمة تتجاوز الكتف: نقطعها بخط أفقي عند مستوى الكتف
+      path.lineTo(xe + (ye - shoulderY) / m, shoulderY);
+      path.lineTo(xs - (ys - shoulderY) / m, shoulderY);
+    }
+  }
 
   void _text(Canvas canvas, String s, Offset center, double size,
       FontWeight weight) {
@@ -296,7 +318,13 @@ class KeyPainter extends CustomPainter {
       }
       path.lineTo(cx - half, y);
       path.lineTo(cx + half, y);
-      if (i == n - 1) {
+
+      if (i < n - 1) {
+        // الحافة (الهرم) بين هذه القطعة والتي بعدها
+        final nextCx = pad + slotW * (i + 1.5);
+        final nextY = _yOf(depths[i + 1]);
+        _addRidge(path, cx + half, y, nextCx - half, nextY);
+      } else {
         path.lineTo(cx + half + slotW * 0.2, shoulderY);
       }
     }
